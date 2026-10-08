@@ -1,0 +1,6 @@
+'use strict';
+
+module.exports = {
+  'migrations-path': 'src/migrations',
+  'seeders-path': 'src/seeders'
+};
