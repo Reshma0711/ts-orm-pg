@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
-import { randomInt } from "crypto";
 import { sequelize } from "../config/db.config";
 
 import User from "../models/user.model";
@@ -22,7 +21,9 @@ import {
   sendServerError,
   sendSuccess,
 } from "../utils/api-response.util";
-import { sendPasswordResetEmail } from "../services/password-reset-email.service";
+// import { sendPasswordResetEmail } from "../services/password-reset-email.service";
+
+const DEVELOPMENT_PASSWORD_RESET_OTP = "123456";
 
 export class AuthController {
 // REGISTER
@@ -400,12 +401,19 @@ async forgotPassword(
   res: Response
 ) {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return sendFailure(
+        res,
+        503,
+        "Password reset is unavailable while static OTP mode is enabled."
+      );
+    }
+
     const { email } = req.body;
     const user = await User.findOne({ where: { email } });
 
     if (user) {
-      const otp = randomInt(0, 1_000_000).toString().padStart(6, "0");
-      const otpHash = await bcrypt.hash(otp, 10);
+      const otpHash = await bcrypt.hash(DEVELOPMENT_PASSWORD_RESET_OTP, 10);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       user.resetOtpHash = otpHash;
@@ -413,20 +421,13 @@ async forgotPassword(
       user.resetOtpAttempts = 0;
       await user.save();
 
-      try {
-        await sendPasswordResetEmail(user.email, otp);
-      } catch (error) {
-        console.error("Failed to deliver password reset OTP:", error);
-        user.resetOtpHash = null;
-        user.resetOtpExpiresAt = null;
-        user.resetOtpAttempts = 0;
-        await user.save();
-      }
+      // await sendPasswordResetEmail(user.email, DEVELOPMENT_PASSWORD_RESET_OTP);
     }
 
     return sendSuccess(
       res,
-      "If an account exists for that email, a password reset code has been sent."
+      "If an account exists for that email, use the development password reset code.",
+      user ? { otp: DEVELOPMENT_PASSWORD_RESET_OTP } : {}
     );
   } catch (error) {
     console.error("Failed to request password reset:", error);
