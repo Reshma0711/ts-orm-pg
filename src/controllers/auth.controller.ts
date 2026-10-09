@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import { sequelize } from "../config/db.config";
+import { UniqueConstraintError } from "sequelize";
 
 import User from "../models/user.model";
 import Role, { ROLE_CODES } from "../models/role.model";
@@ -69,24 +70,6 @@ async register(
       }
     }
 
-    // Check email
-    const emailExists = await User.findOne({
-      where: { email },
-    });
-
-    if (emailExists) {
-      return sendFailure(res, 400, "Email already exists");
-    }
-
-    // Check mobile
-    const mobileExists = await User.findOne({
-      where: { mobile },
-    });
-
-    if (mobileExists) {
-      return sendFailure(res, 400, "Mobile already exists");
-    }
-
     // Create username
     const username =
       firstName.toLowerCase() +
@@ -123,6 +106,14 @@ async register(
     }, 201);
 
   } catch (error) {
+    if (error instanceof UniqueConstraintError) {
+      return sendFailure(
+        res,
+        409,
+        "Email, mobile, or username already exists"
+      );
+    }
+
     console.error(error);
 
     return sendServerError(res, error);
