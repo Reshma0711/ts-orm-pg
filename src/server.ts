@@ -3,6 +3,7 @@ import express from "express";
 import { sequelize } from "./config/db.config";
 import { connectRedis } from "./config/redis.config";
 import { uploadsDirectory } from "./config/upload.config";
+import { setupSwagger } from "./config/swagger.config";
 
 import {
   initUserAssociations,
@@ -29,6 +30,9 @@ initUserAssociations();
 
 // Routes
 app.use("/api", routes);
+
+// API documentation
+setupSwagger(app);
 
 
 // Start server

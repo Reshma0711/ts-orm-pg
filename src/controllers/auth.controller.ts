@@ -12,12 +12,6 @@ import {
   verifyRefreshToken,
 } from "../utils/jwt.util";
 import {
-  cacheAccessToken,
-  cacheAuthTokens,
-  clearCachedAuthTokens,
-  getCachedRefreshToken,
-} from "../services/auth-token.service";
-import {
   sendFailure,
   sendServerError,
   sendSuccess,
@@ -27,6 +21,35 @@ import {
 const DEVELOPMENT_PASSWORD_RESET_OTP = "123456";
 
 export class AuthController {
+/**
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Register an account
+ *     description: roleCode 0 creates an admin; roleCode 1 requires assignedTo to be an existing admin ID.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [firstName, lastName, mobile, email, password, roleCode]
+ *             properties:
+ *               firstName: { type: string, minLength: 2, maxLength: 20, example: Jane }
+ *               lastName: { type: string, minLength: 2, maxLength: 20, example: Doe }
+ *               mobile: { type: string, pattern: '^[0-9]{10,15}$', example: '1234567890' }
+ *               email: { type: string, format: email, example: jane@example.com }
+ *               password: { type: string, format: password, example: Password1! }
+ *               roleCode: { type: integer, enum: [0, 1] }
+ *               assignedTo: { type: integer, minimum: 1, example: 1 }
+ *     responses:
+ *       '201': { description: Account registered }
+ *       '400': { description: Invalid request or assignedTo is not an admin }
+ *       '409': { description: Role unavailable or duplicate account data }
+ *       '429': { description: Auth rate limit exceeded }
+ *       '500': { description: Server error }
+ */
 // REGISTER
 async register(
   req: Request,
@@ -120,6 +143,30 @@ async register(
   }
 }
 
+/**
+ * @openapi
+ * /auth/login:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Log in and start a device session
+ *     description: A later login replaces the active session. Six failed attempts lock the account until password reset.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email: { type: string, format: email, example: jane@example.com }
+ *               password: { type: string, format: password }
+ *     responses:
+ *       '200': { description: Login successful; returns accessToken, refreshToken, and user }
+ *       '401': { description: Invalid credentials }
+ *       '423': { description: Account is locked }
+ *       '429': { description: Auth rate limit exceeded }
+ *       '500': { description: Server error }
+ */
 // LOGIN
 async login(
   req: Request,
@@ -164,9 +211,13 @@ async login(
       }
 
       user.failedLoginAttempts = 0;
+      const accessToken = createAccessToken(user.id);
+      const refreshToken = createRefreshToken(user.id);
+      user.accessToken = accessToken;
+      user.refreshToken = refreshToken;
       await user.save({ transaction });
 
-      return { status: "success" as const, user };
+      return { status: "success" as const, user, accessToken, refreshToken };
     });
 
     if (result.status === "locked") {
@@ -181,16 +232,7 @@ async login(
       return sendFailure(res, 401, "Invalid email or password");
     }
 
-    const { user } = result;
-
-    // Create tokens
-    const accessToken =
-      createAccessToken(user.id);
-
-    const refreshToken =
-      createRefreshToken(user.id);
-
-    // await cacheAuthTokens(user.id, accessToken, refreshToken);
+    const { user, accessToken, refreshToken } = result;
 
     return sendSuccess(res, "Login successful", {
       accessToken,
@@ -214,6 +256,27 @@ async login(
   }
 }
 
+/**
+ * @openapi
+ * /auth/refresh-token:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Refresh an access token
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken]
+ *             properties:
+ *               refreshToken: { type: string }
+ *     responses:
+ *       '200': { description: New access token returned }
+ *       '401': { description: Refresh token invalid, expired, or superseded }
+ *       '429': { description: Auth rate limit exceeded }
+ *       '500': { description: Server error }
+ */
 // REFRESH TOKEN
 async refreshToken(
   req: Request,
@@ -230,23 +293,33 @@ async refreshToken(
         refreshToken
       );
 
-    const [user, cachedRefreshToken] = await Promise.all([
-      User.findByPk(decoded.userId),
-      getCachedRefreshToken(decoded.userId),
-    ]);
+    const result = await sequelize.transaction(async (transaction) => {
+      const user = await User.findByPk(decoded.userId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
 
-    if (!user || cachedRefreshToken !== refreshToken) {
+      if (
+        !user ||
+        user.isLocked ||
+        user.refreshToken !== refreshToken
+      ) {
+        return null;
+      }
+
+      const newAccessToken = createAccessToken(user.id);
+      user.accessToken = newAccessToken;
+      await user.save({ transaction });
+
+      return { user, accessToken: newAccessToken };
+    });
+
+    if (!result) {
       return sendFailure(res, 401, "Invalid refresh token");
     }
 
-    // Create new access token
-    const newAccessToken =
-      createAccessToken(user.id);
-
-    await cacheAccessToken(user.id, newAccessToken);
-
     return sendSuccess(res, "Access token refreshed successfully", {
-      accessToken: newAccessToken,
+      accessToken: result.accessToken,
     });
 
   } catch (error) {
@@ -262,6 +335,20 @@ async refreshToken(
   }
 }
 
+/**
+ * @openapi
+ * /auth/profile:
+ *   get:
+ *     tags: [Authentication]
+ *     summary: Get the authenticated user's profile
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       '200': { description: Profile returned }
+ *       '401': { description: Missing, invalid, expired, or superseded access token }
+ *       '404': { description: User not found }
+ *       '500': { description: Server error }
+ */
 // GET PROFILE
 async getProfile(
   req: Request,
@@ -297,6 +384,34 @@ async getProfile(
   }
 }
 
+/**
+ * @openapi
+ * /auth/profile:
+ *   patch:
+ *     tags: [Authentication]
+ *     summary: Update the authenticated user's profile
+ *     description: Partial update. Role and assignedTo cannot be changed here.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             minProperties: 1
+ *             additionalProperties: false
+ *             properties:
+ *               firstName: { type: string, minLength: 2, maxLength: 20 }
+ *               lastName: { type: string, minLength: 2, maxLength: 20 }
+ *               mobile: { type: string, pattern: '^[0-9]{10,15}$' }
+ *               email: { type: string, format: email }
+ *     responses:
+ *       '200': { description: Profile updated }
+ *       '400': { description: Invalid request or duplicate value }
+ *       '401': { description: Authentication required }
+ *       '500': { description: Server error }
+ */
 //Update User
 async updateProfile(
   req: Request,
@@ -386,6 +501,29 @@ async updateProfile(
   }
 }
 
+/**
+ * @openapi
+ * /auth/forgot-password:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Request a password reset OTP
+ *     description: Generic response prevents account enumeration. Development uses a static OTP; reset requests are disabled in production until email delivery is enabled.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email, example: jane@example.com }
+ *     responses:
+ *       '200': { description: Generic reset request response }
+ *       '400': { description: Invalid email }
+ *       '429': { description: Auth rate limit exceeded }
+ *       '503': { description: Password reset disabled in production }
+ *       '500': { description: Server error }
+ */
 // REQUEST PASSWORD RESET
 async forgotPassword(
   req: Request,
@@ -426,6 +564,30 @@ async forgotPassword(
   }
 }
 
+/**
+ * @openapi
+ * /auth/reset-password:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Reset password using an OTP
+ *     description: OTP expires after 10 minutes and is invalidated after five incorrect attempts. Successful reset clears account lockout and revokes the active session.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, otp, newPassword]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               otp: { type: string, pattern: '^[0-9]{6}$', example: '123456' }
+ *               newPassword: { type: string, format: password, minLength: 8, maxLength: 100 }
+ *     responses:
+ *       '200': { description: Password reset }
+ *       '400': { description: Invalid or expired OTP or invalid password }
+ *       '429': { description: Auth rate limit exceeded }
+ *       '500': { description: Server error }
+ */
 // RESET PASSWORD
 async resetPassword(
   req: Request,
@@ -480,6 +642,8 @@ async resetPassword(
       user.resetOtpHash = null;
       user.resetOtpExpiresAt = null;
       user.resetOtpAttempts = 0;
+      user.accessToken = null;
+      user.refreshToken = null;
       await user.save({ transaction });
 
       return { status: "success" as const };
@@ -496,6 +660,31 @@ async resetPassword(
   }
 }
 
+/**
+ * @openapi
+ * /auth/change-password:
+ *   patch:
+ *     tags: [Authentication]
+ *     summary: Change password while authenticated
+ *     description: Requires the current password; revokes the active session after changing it.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [currentPassword, newPassword]
+ *             properties:
+ *               currentPassword: { type: string, format: password }
+ *               newPassword: { type: string, format: password, minLength: 8, maxLength: 100 }
+ *     responses:
+ *       '200': { description: Password changed }
+ *       '400': { description: Current password incorrect or new password invalid }
+ *       '401': { description: Authentication required }
+ *       '500': { description: Server error }
+ */
 // CHANGE PASSWORD
 async changePassword(
   req: Request,
@@ -537,6 +726,8 @@ async changePassword(
       user.failedLoginAttempts = 0;
       user.isLocked = false;
       user.lockedAt = null;
+      user.accessToken = null;
+      user.refreshToken = null;
       await user.save({ transaction });
 
       return { status: "success" as const };
@@ -561,6 +752,19 @@ async changePassword(
   }
 }
 
+/**
+ * @openapi
+ * /auth/logout:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Log out of the current device
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       '200': { description: Session revoked }
+ *       '401': { description: Authentication required }
+ *       '500': { description: Server error }
+ */
 // LOGOUT
 async logout(
   req: Request,
@@ -578,7 +782,9 @@ async logout(
       return sendFailure(res, 404, "User not found");
     }
 
-    // await clearCachedAuthTokens(user.id);
+    user.accessToken = null;
+    user.refreshToken = null;
+    await user.save();
 
     return sendSuccess(res, "Logout successful");
 

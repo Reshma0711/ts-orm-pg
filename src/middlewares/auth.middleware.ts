@@ -8,7 +8,6 @@ import {
   verifyAccessToken,
 } from "../utils/jwt.util";
 import User from "../models/user.model";
-import { getCachedAccessToken } from "../services/auth-token.service";
 import {
   sendFailure,
   sendServerError,
@@ -36,18 +35,9 @@ export async function authenticate(
     const decoded =
       verifyAccessToken(token);
 
-    // const [user, cachedAccessToken] = await Promise.all([
-    //   User.findByPk(decoded.userId),
-    //   getCachedAccessToken(decoded.userId),
-    // ]);
-
-    // if (!user || cachedAccessToken !== token) {
-    //   return sendFailure(res, 401, "Invalid or expired access token");
-    // }
-
     const user = await User.findByPk(decoded.userId);
 
-    if (!user) {
+    if (!user || user.isLocked || user.accessToken !== token) {
       return sendFailure(res, 401, "Invalid or expired access token");
     }
 

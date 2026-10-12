@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { randomUUID } from "node:crypto";
 // import dotenv from "dotenv";
 
 // dotenv.config();
@@ -33,6 +34,7 @@ export function createAccessToken(userId: number) {
     ACCESS_SECRET_KEY,
     {
       expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      jwtid: randomUUID(),
     }
   );
 }
@@ -43,6 +45,7 @@ export function createRefreshToken(userId: number) {
     REFRESH_SECRET_KEY,
     {
       expiresIn: REFRESH_TOKEN_TTL_SECONDS,
+      jwtid: randomUUID(),
     }
   );
 }
