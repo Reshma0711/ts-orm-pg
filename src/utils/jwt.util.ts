@@ -1,8 +1,6 @@
 import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
-// import dotenv from "dotenv";
-
-// dotenv.config();
+import { env } from "../config/env.config";
 
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 export const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -16,11 +14,11 @@ function requireSecret(value: string | undefined, name: string): string {
 }
 
 const ACCESS_SECRET_KEY = requireSecret(
-  process.env.JWT_ACCESS_SECRET,
+  env.jwt.accessSecret,
   "JWT_ACCESS_SECRET"
 );
 const REFRESH_SECRET_KEY = requireSecret(
-  process.env.JWT_REFRESH_SECRET,
+  env.jwt.refreshSecret,
   "JWT_REFRESH_SECRET"
 );
 

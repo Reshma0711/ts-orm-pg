@@ -8,6 +8,7 @@ import {
   verifyAccessToken,
 } from "../utils/jwt.util";
 import User from "../models/user.model";
+import Role from "../models/role.model";
 import {
   sendFailure,
   sendServerError,
@@ -35,13 +36,20 @@ export async function authenticate(
     const decoded =
       verifyAccessToken(token);
 
-    const user = await User.findByPk(decoded.userId);
+    const user = await User.findByPk(decoded.userId, {
+      include: [{
+        model: Role,
+        as: "role",
+        attributes: ["id", "roleCode", "roleName"],
+      }],
+    });
 
     if (!user || user.isLocked || user.accessToken !== token) {
       return sendFailure(res, 401, "Invalid or expired access token");
     }
 
     (req as Request & { userId: number }).userId = decoded.userId;
+    req.authenticatedUser = user;
 
     next();
 

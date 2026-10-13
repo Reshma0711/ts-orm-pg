@@ -7,6 +7,8 @@ import {
 } from "express";
 import {
   assignedUsersPaginationValidation,
+  accessibleUserValidation,
+  assignedUserRecordValidation,
   assignRoleValidation,
   changePasswordValidation,
   createAssignedUserValidation,
@@ -26,6 +28,8 @@ import { sendFailure } from "../utils/api-response.util";
 
 export {
   assignedUsersPaginationValidation,
+  accessibleUserValidation,
+  assignedUserRecordValidation,
   assignRoleValidation,
   changePasswordValidation,
   createAssignedUserValidation,
@@ -59,7 +63,11 @@ export function validate(
     const error = errors.array()[0];
 
     const field = "path" in error ? error.path : "unknown";
-    return sendFailure(res, 400, "Validation failed", {
+    const statusCode = req.validationStatus ?? 400;
+    if (statusCode >= 500) {
+      console.error("Request validation could not be completed:", error.msg);
+    }
+    return sendFailure(res, statusCode, "Validation failed", {
       [field]: error.msg,
     });
   }

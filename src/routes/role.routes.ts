@@ -11,10 +11,10 @@ import {
 const router = Router();
 const roleController = new RoleController();
 
-router.get("/", roleController.listRoles.bind(roleController));
-router.get("/:id", roleIdValidation, validate, roleController.getRole.bind(roleController));
-router.post("/", createRoleValidation, validate, roleController.createRole.bind(roleController));
-router.put("/:id", updateRoleValidation, validate, roleController.updateRole.bind(roleController));
-router.delete("/:id", roleIdValidation, validate, roleController.deleteRole.bind(roleController));
+router.get("/", roleController.listRoles);
+router.get("/:id", roleIdValidation, validate, roleController.getRole);
+router.post("/", createRoleValidation, validate, roleController.createRole);
+router.put("/:id", updateRoleValidation, validate, roleController.updateRole);
+router.delete("/:id", roleIdValidation, validate, roleController.deleteRole);
 
 export default router;

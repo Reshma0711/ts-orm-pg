@@ -21,118 +21,22 @@ const authController = new AuthController();
 
 router.use(authRateLimit);
 
-// ==========================
-// REGISTER
-// ==========================
+router.post("/register", registerValidation, validate, authController.register);
 
-router.post(
-  "/register",
+router.post("/login", loginValidation, validate, authController.login);
 
-  registerValidation,
+router.post("/refresh-token", refreshTokenValidation, validate, authController.refreshToken);
 
-  validate,
+router.post("/forgot-password", forgotPasswordValidation, validate, authController.forgotPassword);
 
-  authController.register.bind(authController),
-);
+router.post("/reset-password", resetPasswordValidation, validate, authController.resetPassword);
 
-// ==========================
-// LOGIN
-// ==========================
+router.get("/profile", authenticate, authController.getProfile);
 
-router.post(
-  "/login",
+router.patch("/profile", authenticate, updateProfileValidation, validate, authController.updateProfile);
 
-  loginValidation,
+router.patch("/change-password", authenticate, changePasswordValidation, validate, authController.changePassword);
 
-  validate,
-
-  authController.login.bind(authController),
-);
-
-// ==========================
-// REFRESH TOKEN
-// ==========================
-
-router.post(
-  "/refresh-token",
-
-  refreshTokenValidation,
-
-  validate,
-
-  authController.refreshToken.bind(authController),
-);
-
-router.post(
-  "/forgot-password",
-
-  forgotPasswordValidation,
-
-  validate,
-
-  authController.forgotPassword.bind(authController),
-);
-
-router.post(
-  "/reset-password",
-
-  resetPasswordValidation,
-
-  validate,
-
-  authController.resetPassword.bind(authController),
-);
-
-// ==========================
-// GET PROFILE
-// ==========================
-
-router.get(
-  "/profile",
-
-  authenticate,
-
-  authController.getProfile.bind(authController),
-);
-
-// ==========================
-// UPDATE PROFILE
-// ==========================
-
-router.patch(
-  "/profile",
-
-  authenticate,
-
-  updateProfileValidation,
-
-  validate,
-
-  authController.updateProfile.bind(authController),
-);
-
-router.patch(
-  "/change-password",
-
-  authenticate,
-
-  changePasswordValidation,
-
-  validate,
-
-  authController.changePassword.bind(authController),
-);
-
-// ==========================
-// LOGOUT
-// ==========================
-
-router.post(
-  "/logout",
-
-  authenticate,
-
-  authController.logout.bind(authController),
-);
+router.post("/logout", authenticate, authController.logout);
 
 export default router;

@@ -1,55 +1,43 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
+import { randomUUID } from "node:crypto";
 import { sequelize } from "../config/db.config";
-import { UniqueConstraintError } from "sequelize";
 
 import User from "../models/user.model";
-import Role, { ROLE_CODES } from "../models/role.model";
+import LoginHistory from "../models/login-history.model";
 
 import {
   createAccessToken,
   createRefreshToken,
-  verifyRefreshToken,
 } from "../utils/jwt.util";
 import {
   sendFailure,
   sendServerError,
   sendSuccess,
 } from "../utils/api-response.util";
+import type {
+  IChangePasswordRequest,
+  IForgotPasswordRequest,
+  ILoginRequest,
+  IRefreshTokenRequest,
+  IRegisterRequest,
+  IResetPasswordRequest,
+} from "../interfaces/request/auth.request";
+import type {
+  IForgotPasswordResponseData,
+  ILoginResponseData,
+  IProfileResponseData,
+  IRefreshTokenResponseData,
+  IRegisterResponseData,
+  IUpdatedProfileResponseData,
+  IEmptyResponseData,
+} from "../interfaces/response/auth.response";
 // import { sendPasswordResetEmail } from "../services/password-reset-email.service";
 
 const DEVELOPMENT_PASSWORD_RESET_OTP = "123456";
 
 export class AuthController {
-/**
- * @openapi
- * /auth/register:
- *   post:
- *     tags: [Authentication]
- *     summary: Register an account
- *     description: roleCode 0 creates an admin; roleCode 1 requires assignedTo to be an existing admin ID.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [firstName, lastName, mobile, email, password, roleCode]
- *             properties:
- *               firstName: { type: string, minLength: 2, maxLength: 20, example: Jane }
- *               lastName: { type: string, minLength: 2, maxLength: 20, example: Doe }
- *               mobile: { type: string, pattern: '^[0-9]{10,15}$', example: '1234567890' }
- *               email: { type: string, format: email, example: jane@example.com }
- *               password: { type: string, format: password, example: Password1! }
- *               roleCode: { type: integer, enum: [0, 1] }
- *               assignedTo: { type: integer, minimum: 1, example: 1 }
- *     responses:
- *       '201': { description: Account registered }
- *       '400': { description: Invalid request or assignedTo is not an admin }
- *       '409': { description: Role unavailable or duplicate account data }
- *       '429': { description: Auth rate limit exceeded }
- *       '500': { description: Server error }
- */
+
 // REGISTER
 async register(
   req: Request,
@@ -62,36 +50,10 @@ async register(
       mobile,
       email,
       password,
-      roleCode,
-      assignedTo,
-    } = req.body;
+    }: IRegisterRequest = req.body;
 
-    const requestedRoleCode = Number(roleCode);
-
-    const role = await Role.findOne({
-      where: { roleCode: requestedRoleCode },
-    });
-
-    if (!role) {
-      return sendFailure(res, 409, "Requested role is not configured");
-    }
-
-    let assigningAdminId: number | null = null;
-    if (role.roleCode !== ROLE_CODES.admin) {
-      assigningAdminId = Number(assignedTo);
-      const assigningAdmin = await User.findByPk(assigningAdminId);
-      const assigningAdminRole = assigningAdmin?.roleId
-        ? await Role.findByPk(assigningAdmin.roleId)
-        : null;
-
-      if (assigningAdminRole?.roleCode !== ROLE_CODES.admin) {
-        return sendFailure(
-          res,
-          400,
-          "assignedTo must be the ID of an existing admin"
-        );
-      }
-    }
+    const role = req.validatedRegistrationRole!;
+    const assigningAdminId = req.validatedAssignedAdminId!;
 
     // Create username
     const username =
@@ -115,7 +77,7 @@ async register(
       assignedTo: assigningAdminId,
     });
 
-    return sendSuccess(res, "Registration successful", {
+    const responseData: IRegisterResponseData = {
       user: {
         id: user.id,
         firstName: user.firstName,
@@ -126,47 +88,17 @@ async register(
         roleCode: role.roleCode,
         roleName: role.roleName,
       },
-    }, 201);
+    };
+
+    return sendSuccess(res, "Registration successful", responseData, 201);
 
   } catch (error) {
-    if (error instanceof UniqueConstraintError) {
-      return sendFailure(
-        res,
-        409,
-        "Email, mobile, or username already exists"
-      );
-    }
-
-    console.error(error);
-
+    console.error("Failed to register user:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /auth/login:
- *   post:
- *     tags: [Authentication]
- *     summary: Log in and start a device session
- *     description: A later login replaces the active session. Six failed attempts lock the account until password reset.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [email, password]
- *             properties:
- *               email: { type: string, format: email, example: jane@example.com }
- *               password: { type: string, format: password }
- *     responses:
- *       '200': { description: Login successful; returns accessToken, refreshToken, and user }
- *       '401': { description: Invalid credentials }
- *       '423': { description: Account is locked }
- *       '429': { description: Auth rate limit exceeded }
- *       '500': { description: Server error }
- */
+
 // LOGIN
 async login(
   req: Request,
@@ -176,7 +108,7 @@ async login(
     const {
       email,
       password,
-    } = req.body;
+    }: ILoginRequest = req.body;
 
     const result = await sequelize.transaction(async (transaction) => {
       const user = await User.findOne({
@@ -197,13 +129,14 @@ async login(
 
       if (!passwordCorrect) {
         user.failedLoginAttempts += 1;
-        if (user.failedLoginAttempts > 5) {
+        const accountLocked = user.failedLoginAttempts > 5;
+        if (accountLocked) {
           user.isLocked = true;
           user.lockedAt = new Date();
         }
         await user.save({ transaction });
 
-        if (user.isLocked) {
+        if (accountLocked) {
           return { status: "locked" as const };
         }
 
@@ -213,11 +146,48 @@ async login(
       user.failedLoginAttempts = 0;
       const accessToken = createAccessToken(user.id);
       const refreshToken = createRefreshToken(user.id);
+      const deviceId = randomUUID();
+      const loggedInAt = new Date();
       user.accessToken = accessToken;
       user.refreshToken = refreshToken;
       await user.save({ transaction });
 
-      return { status: "success" as const, user, accessToken, refreshToken };
+      const previousSessions = await LoginHistory.findAll({
+        where: { userId: user.id, loggedOutAt: null },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      for (const session of previousSessions) {
+        session.loggedOutAt = loggedInAt;
+        await session.save({ transaction });
+      }
+
+      const userAgent = req.get("user-agent") ?? "";
+      const deviceType = /ipad|tablet/i.test(userAgent)
+        ? "tablet"
+        : /mobile|android|iphone/i.test(userAgent)
+          ? "mobile"
+          : userAgent
+            ? "desktop"
+            : "unknown";
+
+      await LoginHistory.create(
+        {
+          userId: user.id,
+          ipAddress: req.ip || req.socket.remoteAddress || "unknown",
+          deviceType,
+          deviceId,
+        },
+        { transaction }
+      );
+
+      return {
+        status: "success" as const,
+        user,
+        accessToken,
+        refreshToken,
+        deviceId,
+      };
     });
 
     if (result.status === "locked") {
@@ -232,12 +202,11 @@ async login(
       return sendFailure(res, 401, "Invalid email or password");
     }
 
-    const { user, accessToken, refreshToken } = result;
-
-    return sendSuccess(res, "Login successful", {
+    const { user, accessToken, refreshToken, deviceId } = result;
+    const responseData: ILoginResponseData = {
       accessToken,
       refreshToken,
-
+      deviceId,
       user: {
         id: user.id,
         firstName: user.firstName,
@@ -247,7 +216,9 @@ async login(
         username: user.username,
         profilePicture: user.profilePicture,
       },
-    });
+    };
+
+    return sendSuccess(res, "Login successful", responseData);
 
   } catch (error) {
     console.error(error);
@@ -256,27 +227,7 @@ async login(
   }
 }
 
-/**
- * @openapi
- * /auth/refresh-token:
- *   post:
- *     tags: [Authentication]
- *     summary: Refresh an access token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [refreshToken]
- *             properties:
- *               refreshToken: { type: string }
- *     responses:
- *       '200': { description: New access token returned }
- *       '401': { description: Refresh token invalid, expired, or superseded }
- *       '429': { description: Auth rate limit exceeded }
- *       '500': { description: Server error }
- */
+
 // REFRESH TOKEN
 async refreshToken(
   req: Request,
@@ -285,16 +236,12 @@ async refreshToken(
   try {
     const {
       refreshToken,
-    } = req.body;
+    }: IRefreshTokenRequest = req.body;
 
-    // Verify token
-    const decoded =
-      verifyRefreshToken(
-        refreshToken
-      );
+    const refreshTokenUserId = req.validatedRefreshTokenUserId!;
 
     const result = await sequelize.transaction(async (transaction) => {
-      const user = await User.findByPk(decoded.userId, {
+      const user = await User.findByPk(refreshTokenUserId, {
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
@@ -318,55 +265,28 @@ async refreshToken(
       return sendFailure(res, 401, "Invalid refresh token");
     }
 
-    return sendSuccess(res, "Access token refreshed successfully", {
+    const responseData: IRefreshTokenResponseData = {
       accessToken: result.accessToken,
-    });
+    };
+
+    return sendSuccess(res, "Access token refreshed successfully", responseData);
 
   } catch (error) {
-    if (
-      error instanceof Error &&
-      ["JsonWebTokenError", "TokenExpiredError", "NotBeforeError"].includes(error.name)
-    ) {
-      return sendFailure(res, 401, "Invalid or expired refresh token");
-    }
-
     console.error("Failed to refresh access token:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /auth/profile:
- *   get:
- *     tags: [Authentication]
- *     summary: Get the authenticated user's profile
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       '200': { description: Profile returned }
- *       '401': { description: Missing, invalid, expired, or superseded access token }
- *       '404': { description: User not found }
- *       '500': { description: Server error }
- */
+
 // GET PROFILE
 async getProfile(
   req: Request,
   res: Response
 ) {
   try {
-    const userId =
-      (req as any).userId;
+    const user = req.authenticatedUser!;
 
-    const user = await User.findByPk(
-      userId
-    );
-
-    if (!user) {
-      return sendFailure(res, 404, "User not found");
-    }
-
-    return sendSuccess(res, "Profile retrieved successfully", {
+    const responseData: IProfileResponseData = {
       user: {
         id: user.id,
         firstName: user.firstName,
@@ -376,7 +296,9 @@ async getProfile(
         username: user.username,
         profilePicture: user.profilePicture,
       },
-    });
+    };
+
+    return sendSuccess(res, "Profile retrieved successfully", responseData);
 
   } catch (error) {
     console.error("Failed to retrieve profile:", error);
@@ -384,105 +306,18 @@ async getProfile(
   }
 }
 
-/**
- * @openapi
- * /auth/profile:
- *   patch:
- *     tags: [Authentication]
- *     summary: Update the authenticated user's profile
- *     description: Partial update. Role and assignedTo cannot be changed here.
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             minProperties: 1
- *             additionalProperties: false
- *             properties:
- *               firstName: { type: string, minLength: 2, maxLength: 20 }
- *               lastName: { type: string, minLength: 2, maxLength: 20 }
- *               mobile: { type: string, pattern: '^[0-9]{10,15}$' }
- *               email: { type: string, format: email }
- *     responses:
- *       '200': { description: Profile updated }
- *       '400': { description: Invalid request or duplicate value }
- *       '401': { description: Authentication required }
- *       '500': { description: Server error }
- */
+
 //Update User
 async updateProfile(
   req: Request,
   res: Response
 ) {
   try {
-    // User ID comes from auth middleware
-    const userId = (req as any).userId;
-
-    const {
-      firstName,
-      lastName,
-      mobile,
-      email,
-    } = req.body;
-
-    // Find logged-in user
-    const user = await User.findByPk(userId);
-
-    if (!user) {
-      return sendFailure(res, 404, "User not found");
-    }
-
-    // Check email if user is changing it
-    if (email && email !== user.email) {
-
-      const emailExists =
-        await User.findOne({
-          where: {
-            email,
-          },
-        });
-
-      if (emailExists) {
-        return sendFailure(res, 400, "Email already exists");
-      }
-
-      user.email = email;
-    }
-
-    // Check mobile if user is changing it
-    if (mobile && mobile !== user.mobile) {
-
-      const mobileExists =
-        await User.findOne({
-          where: {
-            mobile,
-          },
-        });
-
-      if (mobileExists) {
-        return sendFailure(res, 400, "Mobile already exists");
-      }
-
-      user.mobile = mobile;
-    }
-
-    // Update first name
-    if (firstName) {
-      user.firstName = firstName;
-    }
-
-    // Update last name
-    if (lastName) {
-      user.lastName = lastName;
-    }
-
-    // Save changes
+    const user = req.authenticatedUser!;
+    Object.assign(user, req.validatedProfileUpdates!);
     await user.save();
 
-    return sendSuccess(res, "Profile updated successfully", {
+    const responseData: IUpdatedProfileResponseData = {
       user: {
         id: user.id,
         firstName: user.firstName,
@@ -491,54 +326,24 @@ async updateProfile(
         email: user.email,
         username: user.username,
       },
-    });
+    };
+
+    return sendSuccess(res, "Profile updated successfully", responseData);
 
   } catch (error) {
-
     console.error(error);
-
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /auth/forgot-password:
- *   post:
- *     tags: [Authentication]
- *     summary: Request a password reset OTP
- *     description: Generic response prevents account enumeration. Development uses a static OTP; reset requests are disabled in production until email delivery is enabled.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [email]
- *             properties:
- *               email: { type: string, format: email, example: jane@example.com }
- *     responses:
- *       '200': { description: Generic reset request response }
- *       '400': { description: Invalid email }
- *       '429': { description: Auth rate limit exceeded }
- *       '503': { description: Password reset disabled in production }
- *       '500': { description: Server error }
- */
+
 // REQUEST PASSWORD RESET
 async forgotPassword(
   req: Request,
   res: Response
 ) {
   try {
-    if (process.env.NODE_ENV === "production") {
-      return sendFailure(
-        res,
-        503,
-        "Password reset is unavailable while static OTP mode is enabled."
-      );
-    }
-
-    const { email } = req.body;
+    const { email }: IForgotPasswordRequest = req.body;
     const user = await User.findOne({ where: { email } });
 
     if (user) {
@@ -553,10 +358,14 @@ async forgotPassword(
       // await sendPasswordResetEmail(user.email, DEVELOPMENT_PASSWORD_RESET_OTP);
     }
 
+    const responseData: IForgotPasswordResponseData = user
+      ? { otp: DEVELOPMENT_PASSWORD_RESET_OTP }
+      : {};
+
     return sendSuccess(
       res,
       "If an account exists for that email, use the development password reset code.",
-      user ? { otp: DEVELOPMENT_PASSWORD_RESET_OTP } : {}
+      responseData
     );
   } catch (error) {
     console.error("Failed to request password reset:", error);
@@ -564,37 +373,14 @@ async forgotPassword(
   }
 }
 
-/**
- * @openapi
- * /auth/reset-password:
- *   post:
- *     tags: [Authentication]
- *     summary: Reset password using an OTP
- *     description: OTP expires after 10 minutes and is invalidated after five incorrect attempts. Successful reset clears account lockout and revokes the active session.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [email, otp, newPassword]
- *             properties:
- *               email: { type: string, format: email }
- *               otp: { type: string, pattern: '^[0-9]{6}$', example: '123456' }
- *               newPassword: { type: string, format: password, minLength: 8, maxLength: 100 }
- *     responses:
- *       '200': { description: Password reset }
- *       '400': { description: Invalid or expired OTP or invalid password }
- *       '429': { description: Auth rate limit exceeded }
- *       '500': { description: Server error }
- */
+
 // RESET PASSWORD
 async resetPassword(
   req: Request,
   res: Response
 ) {
   try {
-    const { email, otp, newPassword } = req.body;
+    const { email, otp, newPassword }: IResetPasswordRequest = req.body;
 
     const result = await sequelize.transaction(async (transaction) => {
       const user = await User.findOne({
@@ -645,6 +431,13 @@ async resetPassword(
       user.accessToken = null;
       user.refreshToken = null;
       await user.save({ transaction });
+      await LoginHistory.update(
+        { loggedOutAt: new Date() },
+        {
+          where: { userId: user.id, loggedOutAt: null },
+          transaction,
+        }
+      );
 
       return { status: "success" as const };
     });
@@ -653,38 +446,15 @@ async resetPassword(
       return sendFailure(res, 400, "Invalid or expired password reset code");
     }
 
-    return sendSuccess(res, "Password reset successfully");
+    const responseData: IEmptyResponseData = {};
+    return sendSuccess(res, "Password reset successfully", responseData);
   } catch (error) {
     console.error("Failed to reset password:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /auth/change-password:
- *   patch:
- *     tags: [Authentication]
- *     summary: Change password while authenticated
- *     description: Requires the current password; revokes the active session after changing it.
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [currentPassword, newPassword]
- *             properties:
- *               currentPassword: { type: string, format: password }
- *               newPassword: { type: string, format: password, minLength: 8, maxLength: 100 }
- *     responses:
- *       '200': { description: Password changed }
- *       '400': { description: Current password incorrect or new password invalid }
- *       '401': { description: Authentication required }
- *       '500': { description: Server error }
- */
+
 // CHANGE PASSWORD
 async changePassword(
   req: Request,
@@ -692,7 +462,7 @@ async changePassword(
 ) {
   try {
     const userId = (req as Request & { userId: number }).userId;
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword }: IChangePasswordRequest = req.body;
 
     const result = await sequelize.transaction(async (transaction) => {
       const user = await User.findByPk(userId, {
@@ -729,6 +499,13 @@ async changePassword(
       user.accessToken = null;
       user.refreshToken = null;
       await user.save({ transaction });
+      await LoginHistory.update(
+        { loggedOutAt: new Date() },
+        {
+          where: { userId: user.id, loggedOutAt: null },
+          transaction,
+        }
+      );
 
       return { status: "success" as const };
     });
@@ -745,48 +522,72 @@ async changePassword(
       return sendFailure(res, 400, "New password must differ from current password");
     }
 
-    return sendSuccess(res, "Password changed successfully");
+    const responseData: IEmptyResponseData = {};
+    return sendSuccess(res, "Password changed successfully", responseData);
   } catch (error) {
     console.error("Failed to change password:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /auth/logout:
- *   post:
- *     tags: [Authentication]
- *     summary: Log out of the current device
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       '200': { description: Session revoked }
- *       '401': { description: Authentication required }
- *       '500': { description: Server error }
- */
+
 // LOGOUT
 async logout(
   req: Request,
   res: Response
 ) {
   try {
-    const userId =
-      (req as any).userId;
+    const userId = (req as Request & { userId: number }).userId;
 
-    const user = await User.findByPk(
-      userId
-    );
+    const logoutResult = await sequelize.transaction(async (transaction) => {
+      const sessionUser = await User.findByPk(userId, {
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
 
-    if (!user) {
+      if (!sessionUser) {
+        return "not-found" as const;
+      }
+
+      const authorization = req.headers.authorization;
+      const [scheme, accessToken] = authorization?.split(" ") ?? [];
+      if (
+        scheme !== "Bearer" ||
+        !accessToken ||
+        sessionUser.accessToken !== accessToken
+      ) {
+        return "superseded" as const;
+      }
+
+      sessionUser.accessToken = null;
+      sessionUser.refreshToken = null;
+      await sessionUser.save({ transaction });
+
+      const activeLogin = await LoginHistory.findOne({
+        where: { userId: sessionUser.id, loggedOutAt: null },
+        order: [["createdAt", "DESC"]],
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (activeLogin) {
+        activeLogin.loggedOutAt = new Date();
+        await activeLogin.save({ transaction });
+      }
+
+      return "success" as const;
+    });
+
+    if (logoutResult === "not-found") {
       return sendFailure(res, 404, "User not found");
     }
 
-    user.accessToken = null;
-    user.refreshToken = null;
-    await user.save();
+    if (logoutResult === "superseded") {
+      return sendFailure(res, 401, "This session has been replaced by another login");
+    }
 
-    return sendSuccess(res, "Logout successful");
+    const responseData: IEmptyResponseData = {};
+    return sendSuccess(res, "Logout successful", responseData);
 
   } catch (error) {
     console.error("Failed to log out:", error);

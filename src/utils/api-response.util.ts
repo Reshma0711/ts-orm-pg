@@ -1,4 +1,6 @@
 import { Response } from "express";
+import { UniqueConstraintError } from "sequelize";
+import { isProduction } from "../config/env.config";
 
 export type ApiErrors = Record<string, unknown>;
 
@@ -30,9 +32,20 @@ export function sendFailure(
   });
 }
 
-export function sendServerError(res: Response, error: unknown) {
+export function sendServerError(
+  res: Response,
+  error: unknown
+) {
+  if (error instanceof UniqueConstraintError) {
+    return sendFailure(
+      res,
+      409,
+      "A record with the provided unique values already exists"
+    );
+  }
+
   const errors =
-    process.env.NODE_ENV === "production"
+    isProduction
       ? { code: "INTERNAL_SERVER_ERROR" }
       : {
           details:

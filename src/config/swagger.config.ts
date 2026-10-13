@@ -3,12 +3,13 @@ import path from "node:path";
 import type { Express } from "express";
 import swaggerJSDoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
+import { env } from "./env.config";
 
-const sourceControllers = path.resolve(process.cwd(), "src/controllers");
-const compiledControllers = path.resolve(process.cwd(), "dist/controllers");
-const controllerDocs = (existsSync(sourceControllers)
-  ? path.join(sourceControllers, "*.ts")
-  : path.join(compiledControllers, "*.js")
+const sourceSwaggerDocs = path.resolve(process.cwd(), "src/swagger");
+const compiledSwaggerDocs = path.resolve(process.cwd(), "dist/swagger");
+const swaggerDocs = (existsSync(sourceSwaggerDocs)
+  ? path.join(sourceSwaggerDocs, "*.ts")
+  : path.join(compiledSwaggerDocs, "*.js")
 ).replace(/\\/g, "/");
 
 const swaggerOptions: swaggerJSDoc.Options = {
@@ -21,8 +22,8 @@ const swaggerOptions: swaggerJSDoc.Options = {
     },
     servers: [
       {
-        url: process.env.API_BASE_URL || "http://localhost:3000/api",
-        description: process.env.API_BASE_URL ? "Configured API server" : "Local development server",
+        url: env.apiBaseUrl || `http://localhost:${env.port}/api`,
+        description: env.apiBaseUrl ? "Configured API server" : "Local development server",
       },
       
     ],
@@ -58,7 +59,7 @@ const swaggerOptions: swaggerJSDoc.Options = {
       },
     },
   },
-  apis: [controllerDocs],
+  apis: [swaggerDocs],
 };
 
 export const swaggerSpec = swaggerJSDoc(swaggerOptions);
@@ -68,5 +69,6 @@ export function setupSwagger(app: Express): void {
     res.json(swaggerSpec);
   });
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-   console.log(`Serving Swagger API documentation url: ${process.env.API_BASE_URL}-docs`)
+  console.log(`Serving Swagger API documentation at ${env.apiBaseUrl}/api-docs`);
 }
+

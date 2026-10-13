@@ -1,12 +1,10 @@
 import { S3Client } from "@aws-sdk/client-s3";
-// import dotenv from "dotenv";
-
-// dotenv.config();
+import { env } from "./env.config";
 
 let s3Client: S3Client | undefined;
 
 export function getS3Client(): S3Client {
-  const region = process.env.AWS_REGION;
+  const region = env.s3.region;
   if (!region) {
     throw new Error("AWS_REGION is not configured");
   }
@@ -16,7 +14,7 @@ export function getS3Client(): S3Client {
 }
 
 export function getS3Bucket(): string {
-  const bucket = process.env.AWS_S3_BUCKET;
+  const bucket = env.s3.bucket;
   if (!bucket) {
     throw new Error("AWS_S3_BUCKET is not configured");
   }

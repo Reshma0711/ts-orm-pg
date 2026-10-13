@@ -6,77 +6,32 @@ import { requireAdmin } from "../middlewares/admin.middleware";
 import { uploadProfilePicture } from "../middlewares/profile-picture-upload.middleware";
 import {
   assignedUsersPaginationValidation,
-  assignRoleValidation,
+  accessibleUserValidation,
+  assignedUserRecordValidation,
   createAssignedUserValidation,
   profilePictureUploadUrlValidation,
   updateProfileValidation,
-  userIdValidation,
   validate,
 } from "../middlewares/validation.middleware";
 
 const router = Router();
 const userController = new UserController();
 
-router.get(
-  "/assigned",
-  authenticate,
-  requireAdmin,
-  assignedUsersPaginationValidation,
-  validate,
-  userController.listAssignedUsers.bind(userController)
-);
+router.get("/assigned", authenticate, requireAdmin, assignedUsersPaginationValidation, validate, userController.listAssignedUsers);
 
-router.get(
-  "/:id",
-  authenticate,
-  // requireAdmin,
-  userIdValidation,
-  validate,
-  userController.getAssignedUserById.bind(userController)
-);
+router.get("/login-history", authenticate, assignedUsersPaginationValidation, validate, userController.getUserLoginHistory);
 
-router.post(
-  "/",
-  authenticate,
-  requireAdmin,
-  createAssignedUserValidation,
-  validate,
-  userController.createAssignedUser.bind(userController)
-);
+router.get("/:id", authenticate, accessibleUserValidation, validate, userController.getAssignedUserById);
 
-router.post(
-  "/upload",
-  authenticate,
-  uploadProfilePicture,
-  userController.uploadProfilePicture.bind(userController)
-);
+router.post("/", authenticate, requireAdmin, createAssignedUserValidation, validate, userController.createAssignedUser);
 
-router.post(
-  "/upload-url",
-  authenticate,
-  profilePictureUploadUrlValidation,
-  validate,
-  userController.createProfilePictureUploadUrl.bind(userController)
-);
+router.post("/upload", authenticate, uploadProfilePicture, userController.uploadProfilePicture);
 
-router.patch(
-  "/:id",
-  authenticate,
-  requireAdmin,
-  userIdValidation,
-  updateProfileValidation,
-  validate,
-  userController.updateAssignedUser.bind(userController)
-);
+router.post("/upload-url", authenticate, profilePictureUploadUrlValidation, validate, userController.createProfilePictureUploadUrl);
 
-router.delete(
-  "/:id",
-  authenticate,
-  requireAdmin,
-  userIdValidation,
-  validate,
-  userController.deleteAssignedUser.bind(userController)
-);
+router.patch("/:id", authenticate, requireAdmin, assignedUserRecordValidation, updateProfileValidation, validate, userController.updateAssignedUser);
+
+router.delete("/:id", authenticate, requireAdmin, assignedUserRecordValidation, validate, userController.deleteAssignedUser);
 
 
 export default router;

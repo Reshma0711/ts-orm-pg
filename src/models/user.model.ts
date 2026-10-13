@@ -5,6 +5,7 @@ import {
   InferAttributes,
   InferCreationAttributes,
   CreationOptional,
+  NonAttribute,
 } from "sequelize";
 import Role from "./role.model";
 
@@ -36,6 +37,9 @@ class User extends Model<
 
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare role?: NonAttribute<Role | null>;
+  declare assignedToAdmin?: NonAttribute<User | null>;
 }
 
 export function initUserModel(sequelize: Sequelize) {

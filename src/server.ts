@@ -1,5 +1,6 @@
 import express from "express";
 
+import { env } from "./config/env.config";
 import { sequelize } from "./config/db.config";
 import { connectRedis } from "./config/redis.config";
 import { uploadsDirectory } from "./config/upload.config";
@@ -10,6 +11,10 @@ import {
   initUserModel,
 } from "./models/user.model";
 import { initRoleModel } from "./models/role.model";
+import {
+  initLoginHistoryAssociations,
+  initLoginHistoryModel,
+} from "./models/login-history.model";
 
 import routes from "./routes";
 
@@ -25,7 +30,9 @@ app.use("/uploads", express.static(uploadsDirectory));
 // Initialize model
 initRoleModel(sequelize);
 initUserModel(sequelize);
+initLoginHistoryModel(sequelize);
 initUserAssociations();
+initLoginHistoryAssociations();
 
 
 // Routes
@@ -48,7 +55,7 @@ async function startServer() {
 
     // Start Express
     app.listen(
-      3000,
+      env.port,
       () => {
         console.log(
           "Server running on port 3000"

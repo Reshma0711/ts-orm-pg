@@ -1,6 +1,211 @@
 import { body, param, query } from "express-validator";
+import type { Request } from "express";
 
-import { ROLE_CODES } from "../models/role.model";
+import Role, { ROLE_CODES } from "../models/role.model";
+import User from "../models/user.model";
+import { isProduction } from "../config/env.config";
+import {
+  verifyRefreshToken,
+} from "../utils/jwt.util";
+import type { IUpdateProfileRequest } from "../interfaces/request/auth.request";
+
+const asRequest = (request: unknown): Request => request as Request;
+
+const uniqueUserFieldValidation = (
+  field: "email" | "mobile",
+  message: string
+) =>
+  body(field).custom(async (value, { req }) => {
+    if (typeof value !== "string" || value.length === 0) {
+      return true;
+    }
+
+    const request = asRequest(req);
+    const userId = request.params.id
+      ? Number(request.params.id)
+      : request.userId;
+    const existingUser = await User.findOne({ where: { [field]: value } });
+
+    if (existingUser && existingUser.id !== userId) {
+      throw new Error(message);
+    }
+
+    return true;
+  });
+
+const configuredRoleCodeValidation = () =>
+  body("roleCode").custom(async (value, { req }) => {
+    if (!Object.values(ROLE_CODES).some((roleCode) => roleCode === Number(value))) {
+      return true;
+    }
+
+    const role = await Role.findOne({ where: { roleCode: Number(value) } });
+    if (!role) {
+      throw new Error("Requested role is not configured");
+    }
+    const request = asRequest(req);
+    request.validatedRegistrationRole = role;
+    if (role.roleCode === ROLE_CODES.admin) {
+      request.validatedAssignedAdminId = null;
+    }
+    return true;
+  });
+
+const assignedAdminValidation = () =>
+  body("assignedTo")
+    .if((_value, { req }) => Number(req.body.roleCode) !== ROLE_CODES.admin)
+    .custom(async (value, { req }) => {
+      if (!Number.isInteger(Number(value)) || Number(value) < 1) {
+        return true;
+      }
+
+      const assignedUser = await User.findByPk(Number(value));
+      if (!assignedUser) {
+        return markValidationFailure(
+          req,
+          400,
+          "assignedTo must be the ID of an existing admin"
+        );
+      }
+      const assignedRole = assignedUser.roleId
+        ? await Role.findByPk(assignedUser.roleId)
+        : null;
+
+      if (assignedRole?.roleCode !== ROLE_CODES.admin) {
+        throw new Error("assignedTo must be the ID of an existing admin");
+      }
+
+      const request = asRequest(req);
+      request.validatedAssignedAdmin = assignedUser;
+      request.validatedAssignedAdminId = assignedUser.id;
+      return true;
+    });
+
+const uniqueRoleNameValidation = () =>
+  body("roleName").custom(async (value, { req }) => {
+    if (typeof value !== "string" || value.length === 0) {
+      return true;
+    }
+
+    const existingRole = await Role.findOne({ where: { roleName: value } });
+    const request = asRequest(req);
+    const roleId = request.params?.id ? Number(request.params.id) : undefined;
+    if (existingRole && existingRole.id !== roleId) {
+      throw new Error("Role already exists");
+    }
+    return true;
+  });
+
+const markValidationFailure = (
+  req: unknown,
+  status: number,
+  message: string
+): never => {
+  const request = asRequest(req);
+  request.validationStatus ??= status;
+  throw new Error(message);
+};
+
+const userRoleConfiguredValidation = () =>
+  body("email").custom(async (_value, { req }) => {
+    const role = await Role.findOne({
+      where: { roleCode: ROLE_CODES.user },
+    });
+    if (!role) {
+      return markValidationFailure(req, 503, "User role is not configured");
+    }
+
+    asRequest(req).validatedUserRole = role;
+    return true;
+  });
+
+const accessibleUserByIdValidation = (
+  notFoundMessage: string,
+  forbiddenMessage: string
+) => [
+  param("id")
+    .isInt({ min: 1 })
+    .withMessage("User ID must be a positive integer")
+    .bail()
+    .custom(async (value, { req }) => {
+      const request = asRequest(req);
+      const requester = request.authenticatedUser;
+      if (!requester) {
+        return markValidationFailure(req, 401, "Authentication required");
+      }
+
+      const userId = Number(value);
+      const isAdmin = requester.role?.roleCode === ROLE_CODES.admin;
+      if (userId !== requester.id && !isAdmin) {
+        return markValidationFailure(
+          req,
+          403,
+          forbiddenMessage
+        );
+      }
+
+      const targetUser = await User.findOne({
+        where: {
+          id: userId,
+          ...(userId !== requester.id ? { assignedTo: requester.id } : {}),
+        },
+        attributes: [
+          "id",
+          "firstName",
+          "lastName",
+          "mobile",
+          "email",
+          "username",
+          "roleId",
+          "assignedTo",
+          "profilePicture",
+          "createdAt",
+        ],
+        include: [
+          {
+            model: Role,
+            as: "role",
+            attributes: ["roleCode", "roleName"],
+          },
+          {
+            model: User,
+            as: "assignedToAdmin",
+            attributes: ["id", "firstName", "lastName"],
+          },
+        ],
+      });
+      if (!targetUser) {
+        return markValidationFailure(req, 404, notFoundMessage);
+      }
+
+      request.validatedTargetUser = targetUser;
+      return true;
+    }),
+];
+
+const assignedUserByIdValidation = [
+  param("id")
+    .isInt({ min: 1 })
+    .withMessage("User ID must be a positive integer")
+    .bail()
+    .custom(async (value, { req }) => {
+      const request = asRequest(req);
+      const admin = request.authenticatedUser;
+      if (!admin) {
+        return markValidationFailure(req, 401, "Authentication required");
+      }
+
+      const user = await User.findOne({
+        where: { id: Number(value), assignedTo: admin.id },
+      });
+      if (!user) {
+        return markValidationFailure(req, 404, "Assigned user not found");
+      }
+
+      request.validatedTargetUser = user;
+      return true;
+    }),
+];
 
 export const registerValidation = [
   body("firstName")
@@ -32,6 +237,10 @@ export const registerValidation = [
     .bail()
     .matches(/^[0-9]{10,15}$/)
     .withMessage("Mobile number must contain 10 to 15 digits"),
+  uniqueUserFieldValidation(
+    "mobile",
+    "This mobile number is already registered. Please use a different mobile number."
+  ),
 
   body("email")
     .trim()
@@ -41,6 +250,10 @@ export const registerValidation = [
     .isEmail()
     .withMessage("Please provide a valid email address")
     .normalizeEmail(),
+  uniqueUserFieldValidation(
+    "email",
+    "This email is already registered. Please use a different email address."
+  ),
 
   body("password")
     .notEmpty()
@@ -71,6 +284,7 @@ export const registerValidation = [
     .toInt()
     .isIn(Object.values(ROLE_CODES))
     .withMessage("Role code must be 0 (admin) or 1 (user)"),
+  configuredRoleCodeValidation(),
 
   body("assignedTo")
     .if((_value, { req }) => Number(req.body.roleCode) !== ROLE_CODES.admin)
@@ -81,6 +295,7 @@ export const registerValidation = [
     .withMessage("Assigned admin user ID must be a positive integer")
     .bail()
     .toInt(),
+  assignedAdminValidation(),
 ];
 
 export const loginValidation = [
@@ -102,10 +317,42 @@ export const refreshTokenValidation = [
   body("refreshToken")
     .trim()
     .notEmpty()
-    .withMessage("Refresh token is required"),
+    .withMessage("Refresh token is required")
+    .bail()
+    .custom((value, { req }) => {
+      try {
+        asRequest(req).validatedRefreshTokenUserId =
+          verifyRefreshToken(value).userId;
+        return true;
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          ["JsonWebTokenError", "TokenExpiredError", "NotBeforeError"].includes(
+            error.name
+          )
+        ) {
+          return markValidationFailure(
+            req,
+            401,
+            "Invalid or expired refresh token"
+          );
+        }
+        throw error;
+      }
+    }),
 ];
 
 export const forgotPasswordValidation = [
+  body("email").custom((_value, { req }) => {
+    if (isProduction) {
+      return markValidationFailure(
+        req,
+        503,
+        "Password reset is unavailable while static OTP mode is enabled."
+      );
+    }
+    return true;
+  }),
   body("email")
     .trim()
     .notEmpty()
@@ -177,6 +424,18 @@ export const changePasswordValidation = [
 ];
 
 export const updateProfileValidation = [
+  body().custom((value, { req }) => {
+    const { firstName, lastName, mobile, email } = value ?? {};
+    if (
+      firstName === undefined &&
+      lastName === undefined &&
+      mobile === undefined &&
+      email === undefined
+    ) {
+      throw new Error("At least one profile field must be provided");
+    }
+    return true;
+  }),
   body("roleId")
     .not()
     .exists()
@@ -217,6 +476,10 @@ export const updateProfileValidation = [
     .trim()
     .matches(/^[0-9]{10,15}$/)
     .withMessage("Mobile number must contain 10 to 15 digits"),
+  uniqueUserFieldValidation(
+    "mobile",
+    "This mobile number is already registered. Please use a different mobile number."
+  ),
 
   body("email")
     .optional()
@@ -224,6 +487,27 @@ export const updateProfileValidation = [
     .isEmail()
     .withMessage("Please provide a valid email address")
     .normalizeEmail(),
+  uniqueUserFieldValidation(
+    "email",
+    "This email is already registered. Please use a different email address."
+  ),
+  body().custom((value, { req }) => {
+    const updates: IUpdateProfileRequest = {};
+    if (value.firstName !== undefined) {
+      updates.firstName = value.firstName;
+    }
+    if (value.lastName !== undefined) {
+      updates.lastName = value.lastName;
+    }
+    if (value.mobile !== undefined) {
+      updates.mobile = value.mobile;
+    }
+    if (value.email !== undefined) {
+      updates.email = value.email;
+    }
+    asRequest(req).validatedProfileUpdates = updates;
+    return true;
+  }),
 ];
 
 const roleNameValidation = () =>
@@ -235,19 +519,30 @@ const roleNameValidation = () =>
     .isIn(Object.keys(ROLE_CODES))
     .withMessage("Role name must be admin or user");
 
-export const createRoleValidation = [roleNameValidation()];
-
-export const updateRoleValidation = [
-  param("id")
-    .isInt({ min: 1 })
-    .withMessage("Role ID must be a positive integer"),
+export const createRoleValidation = [
   roleNameValidation(),
+  uniqueRoleNameValidation(),
 ];
 
 export const roleIdValidation = [
   param("id")
     .isInt({ min: 1 })
-    .withMessage("Role ID must be a positive integer"),
+    .withMessage("Role ID must be a positive integer")
+    .bail()
+    .custom(async (value, { req }) => {
+      const role = await Role.findByPk(Number(value));
+      if (!role) {
+        return markValidationFailure(req, 404, "Role not found");
+      }
+      asRequest(req).validatedRole = role;
+      return true;
+    }),
+];
+
+export const updateRoleValidation = [
+  ...roleIdValidation,
+  roleNameValidation(),
+  uniqueRoleNameValidation(),
 ];
 
 export const userIdValidation = [
@@ -288,6 +583,7 @@ export const assignedUsersPaginationValidation = [
 ];
 
 export const createAssignedUserValidation = [
+  userRoleConfiguredValidation(),
   body("firstName")
     .trim()
     .notEmpty()
@@ -315,6 +611,11 @@ export const createAssignedUserValidation = [
     .bail()
     .matches(/^[0-9]{10,15}$/)
     .withMessage("Mobile number must contain 10 to 15 digits"),
+  uniqueUserFieldValidation(
+    "mobile",
+    "This mobile number is already registered. Please use a different mobile number."
+  ),
+
   body("email")
     .trim()
     .notEmpty()
@@ -323,6 +624,10 @@ export const createAssignedUserValidation = [
     .isEmail()
     .withMessage("Please provide a valid email address")
     .normalizeEmail(),
+  uniqueUserFieldValidation(
+    "email",
+    "This email is already registered. Please use a different email address."
+  ),
   body("password")
     .notEmpty()
     .withMessage("Password is required")
@@ -359,3 +664,10 @@ export const profilePictureUploadUrlValidation = [
     .isIn(["image/jpeg", "image/png", "image/webp"])
     .withMessage("Content type must be JPEG, PNG, or WebP"),
 ];
+
+export const accessibleUserValidation = accessibleUserByIdValidation(
+  "Assigned user not found",
+  "You can only view your own user details"
+);
+
+export const assignedUserRecordValidation = assignedUserByIdValidation;

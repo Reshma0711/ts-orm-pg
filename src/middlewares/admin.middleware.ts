@@ -1,7 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 
-import Role, { ROLE_CODES } from "../models/role.model";
-import User from "../models/user.model";
+import { ROLE_CODES } from "../models/role.model";
 import {
   sendFailure,
   sendServerError,
@@ -13,18 +12,12 @@ export async function requireAdmin(
   next: NextFunction
 ) {
   try {
-    const userId = (req as Request & { userId?: number }).userId;
-
-    if (!userId) {
+    const user = req.authenticatedUser;
+    if (!user) {
       return sendFailure(res, 401, "Authentication required");
     }
 
-    const user = await User.findByPk(userId);
-    const role = user?.roleId
-      ? await Role.findByPk(user.roleId)
-      : null;
-
-    if (role?.roleCode !== ROLE_CODES.admin) {
+    if (user.role?.roleCode !== ROLE_CODES.admin) {
       return sendFailure(res, 403, "Admin access required");
     }
 

@@ -1,4 +1,5 @@
 import nodemailer, { Transporter } from "nodemailer";
+import { env } from "./env.config";
 
 let emailTransporter: Transporter | undefined;
 
@@ -7,10 +8,7 @@ export function getEmailTransporter(): Transporter {
     return emailTransporter;
   }
 
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT);
-  const username = process.env.SMTP_USER;
-  const password = process.env.SMTP_PASSWORD;
+  const { host, port, username, password } = env.email;
 
   if (
     !host ||
@@ -39,7 +37,7 @@ export function getEmailTransporter(): Transporter {
 }
 
 export function getEmailFromAddress(): string {
-  const from = process.env.SMTP_FROM;
+  const from = env.email.from;
   if (!from) {
     throw new Error("Email is not configured. Set SMTP_FROM.");
   }

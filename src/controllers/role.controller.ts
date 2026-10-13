@@ -1,92 +1,70 @@
 import { Request, Response } from "express";
-import { UniqueConstraintError } from "sequelize";
 
 import Role, { ROLE_CODES, RoleName } from "../models/role.model";
 import {
-  sendFailure,
   sendServerError,
   sendSuccess,
 } from "../utils/api-response.util";
+import type {
+  ICreateRoleRequest,
+  IUpdateRoleRequest,
+} from "../interfaces/request/role.request";
+import type {
+  IDeleteRoleResponseData,
+  IRoleResponse,
+  IRoleResponseData,
+  IRolesResponseData,
+} from "../interfaces/response/role.response";
 
 export class RoleController {
-/**
- * @openapi
- * /roles:
- *   get:
- *     tags: [Roles]
- *     summary: List roles
- *     responses:
- *       '200': { description: Roles returned }
- *       '500': { description: Server error }
- */
+
 async listRoles(_req: Request, res: Response) {
   try {
     const roles = await Role.findAll({
       order: [["id", "ASC"]],
     });
 
-    return sendSuccess(res, "Roles retrieved successfully", { roles });
+    const responseData: IRolesResponseData = {
+      roles: roles.map((role) => ({
+        id: role.id,
+        roleName: role.roleName,
+        roleCode: role.roleCode,
+        createdAt: role.createdAt,
+        updatedAt: role.updatedAt,
+      })),
+    };
+
+    return sendSuccess(res, "Roles retrieved successfully", responseData);
   } catch (error) {
     console.error("Failed to list roles:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /roles/{id}:
- *   get:
- *     tags: [Roles]
- *     summary: Get a role by ID
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer, minimum: 1 }
- *     responses:
- *       '200': { description: Role returned }
- *       '400': { description: Invalid role ID }
- *       '404': { description: Role not found }
- *       '500': { description: Server error }
- */
+
 async getRole(req: Request, res: Response) {
   try {
-    const role = await Role.findByPk(Number(req.params.id));
+    const role = req.validatedRole!;
 
-    if (!role) {
-      return sendFailure(res, 404, "Role not found");
-    }
+    const roleResponse: IRoleResponse = {
+      id: role.id,
+      roleName: role.roleName,
+      roleCode: role.roleCode,
+      createdAt: role.createdAt,
+      updatedAt: role.updatedAt,
+    };
+    const responseData: IRoleResponseData = { role: roleResponse };
 
-    return sendSuccess(res, "Role retrieved successfully", { role });
+    return sendSuccess(res, "Role retrieved successfully", responseData);
   } catch (error) {
     console.error("Failed to retrieve role:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /roles:
- *   post:
- *     tags: [Roles]
- *     summary: Create a role
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [roleName]
- *             properties:
- *               roleName: { type: string, enum: [admin, user] }
- *     responses:
- *       '200': { description: Role created }
- *       '400': { description: Invalid role name }
- *       '409': { description: Role already exists }
- *       '500': { description: Server error }
- */
+
 async createRole(req: Request, res: Response) {
-  const roleName = req.body.roleName as RoleName;
+  const { roleName }: ICreateRoleRequest = req.body;
 
   try {
     const role = await Role.create({
@@ -94,101 +72,57 @@ async createRole(req: Request, res: Response) {
       roleCode: ROLE_CODES[roleName],
     });
 
-    return sendSuccess(
-      res,
-      "Role created successfully",
-      { role },
-      201
-    );
-  } catch (error) {
-    if (error instanceof UniqueConstraintError) {
-      return sendFailure(res, 409, "Role already exists");
-    }
+    const roleResponse: IRoleResponse = {
+      id: role.id,
+      roleName: role.roleName,
+      roleCode: role.roleCode,
+      createdAt: role.createdAt,
+      updatedAt: role.updatedAt,
+    };
+    const responseData: IRoleResponseData = { role: roleResponse };
 
+    return sendSuccess(res, "Role created successfully", responseData, 201);
+  } catch (error) {
     console.error("Failed to create role:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /roles/{id}:
- *   put:
- *     tags: [Roles]
- *     summary: Update a role
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer, minimum: 1 }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [roleName]
- *             properties:
- *               roleName: { type: string, enum: [admin, user] }
- *     responses:
- *       '200': { description: Role updated }
- *       '400': { description: Invalid role ID or role name }
- *       '404': { description: Role not found }
- *       '409': { description: Role already exists }
- *       '500': { description: Server error }
- */
+
 async updateRole(req: Request, res: Response) {
-  const roleName = req.body.roleName as RoleName;
+  const { roleName }: IUpdateRoleRequest = req.body;
 
   try {
-    const role = await Role.findByPk(Number(req.params.id));
-
-    if (!role) {
-      return sendFailure(res, 404, "Role not found");
-    }
+    const role = req.validatedRole!;
 
     role.roleName = roleName;
     role.roleCode = ROLE_CODES[roleName];
     await role.save();
 
-    return sendSuccess(res, "Role updated successfully", { role });
-  } catch (error) {
-    if (error instanceof UniqueConstraintError) {
-      return sendFailure(res, 409, "Role already exists");
-    }
+    const roleResponse: IRoleResponse = {
+      id: role.id,
+      roleName: role.roleName,
+      roleCode: role.roleCode,
+      createdAt: role.createdAt,
+      updatedAt: role.updatedAt,
+    };
+    const responseData: IRoleResponseData = { role: roleResponse };
 
+    return sendSuccess(res, "Role updated successfully", responseData);
+  } catch (error) {
     console.error("Failed to update role:", error);
     return sendServerError(res, error);
   }
 }
 
-/**
- * @openapi
- * /roles/{id}:
- *   delete:
- *     tags: [Roles]
- *     summary: Delete a role
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: integer, minimum: 1 }
- *     responses:
- *       '200': { description: Role deleted }
- *       '400': { description: Invalid role ID }
- *       '404': { description: Role not found }
- *       '500': { description: Server error }
- */
+
 async deleteRole(req: Request, res: Response) {
   try {
-    const role = await Role.findByPk(Number(req.params.id));
-
-    if (!role) {
-      return sendFailure(res, 404, "Role not found");
-    }
+    const role = req.validatedRole!;
 
     await role.destroy();
-    return sendSuccess(res, "Role deleted successfully");
+    const responseData: IDeleteRoleResponseData = {};
+    return sendSuccess(res, "Role deleted successfully", responseData);
   } catch (error) {
     console.error("Failed to delete role:", error);
     return sendServerError(res, error);
