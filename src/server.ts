@@ -15,6 +15,7 @@ import {
   initLoginHistoryAssociations,
   initLoginHistoryModel,
 } from "./models/login-history.model";
+import { initUserAuditLogModel } from "./models/user-audit-log.model";
 
 import routes from "./routes";
 
@@ -31,6 +32,7 @@ app.use("/uploads", express.static(uploadsDirectory));
 initRoleModel(sequelize);
 initUserModel(sequelize);
 initLoginHistoryModel(sequelize);
+initUserAuditLogModel(sequelize);
 initUserAssociations();
 initLoginHistoryAssociations();
 

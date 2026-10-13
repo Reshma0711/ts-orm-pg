@@ -1,9 +1,11 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
+import { sequelize } from "../config/db.config";
 
 import Role from "../models/role.model";
 import User from "../models/user.model";
 import LoginHistory from "../models/login-history.model";
+import UserAuditLog from "../models/user-audit-log.model";
 import {
   sendFailure,
   sendServerError,
@@ -28,6 +30,8 @@ import type {
   IProfilePictureResponseData,
   IProfilePictureUploadUrlResponseData,
   IUpdatedAssignedUserResponseData,
+  IUserAuditLogsResponseData,
+  IUserAuditLogItemResponse,
   IUserLoginHistoryResponseData,
   IUserPaginationResponse,
 } from "../interfaces/response/user.response";
@@ -118,15 +122,26 @@ export class UserController {
           lastName.toLowerCase() +
           Math.floor(Math.random() * 10000);
 
-        const user = await User.create({
-          firstName,
-          lastName,
-          mobile,
-          email,
-          username,
-          password: await bcrypt.hash(password, 10),
-          roleId: role.id,
-          assignedTo: adminId,
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = await sequelize.transaction(async (transaction) => {
+          const createdUser = await User.create({
+            firstName,
+            lastName,
+            mobile,
+            email,
+            username,
+            password: hashedPassword,
+            roleId: role.id,
+            assignedTo: adminId,
+          }, { transaction });
+
+          await UserAuditLog.create({
+            adminId,
+            userId: createdUser.id,
+            action: "USER_CREATED",
+          }, { transaction });
+
+          return createdUser;
         });
 
         const responseData: ICreateAssignedUserResponseData = {
@@ -211,6 +226,42 @@ export class UserController {
         return sendSuccess(res, "Assigned users retrieved successfully", responseData);
       } catch (error) {
         console.error("Failed to retrieve assigned users:", error);
+        return sendServerError(res, error);
+      }
+    }
+
+    async listUserAuditLogs(req: Request, res: Response) {
+      try {
+        const adminId = req.authenticatedUser!.id;
+        const page = Number(req.query.page ?? 1);
+        const limit = Number(req.query.limit ?? 10);
+        const offset = (page - 1) * limit;
+        const { count, rows: auditLogs } = await UserAuditLog.findAndCountAll({
+          where: { adminId },
+          order: [["createdAt", "DESC"]],
+          limit,
+          offset,
+        });
+
+        const responseData: IUserAuditLogsResponseData = {
+          pagination: {
+            page,
+            limit,
+            total: count,
+            totalPages: Math.ceil(count / limit),
+          },
+          auditLogs: auditLogs.map((log): IUserAuditLogItemResponse => ({
+            id: log.id,
+            adminId: log.adminId,
+            userId: log.userId,
+            action: log.action,
+            createdAt: log.createdAt,
+          })),
+        };
+
+        return sendSuccess(res, "User audit logs retrieved successfully", responseData);
+      } catch (error) {
+        console.error("Failed to retrieve user audit logs:", error);
         return sendServerError(res, error);
       }
     }
@@ -314,24 +365,36 @@ export class UserController {
           email,
         }: IUpdateAssignedUserRequest = req.body;
 
-        const user = req.validatedTargetUser!;
+        const user = await sequelize.transaction(async (transaction) => {
+          const targetUser = await User.findOne({
+            where: { id: req.validatedTargetUser!.id, assignedTo: adminId },
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+          });
+          if (!targetUser) {
+            return null;
+          }
 
-        if (email !== undefined) {
-          user.email = email;
-        }
+          Object.assign(
+            targetUser,
+            Object.fromEntries(
+              Object.entries({ firstName, lastName, mobile, email })
+                .filter(([, value]) => value !== undefined)
+            )
+          );
+          await targetUser.save({ transaction });
 
-        if (mobile !== undefined) {
-          user.mobile = mobile;
-        }
+          await UserAuditLog.create({
+            adminId,
+            userId: targetUser.id,
+            action: "USER_UPDATED",
+          }, { transaction });
 
-        if (firstName !== undefined) {
-          user.firstName = firstName;
+          return targetUser;
+        });
+        if (!user) {
+          return sendFailure(res, 404, "Assigned user not found");
         }
-        if (lastName !== undefined) {
-          user.lastName = lastName;
-        }
-
-        await user.save();
 
         const responseData: IUpdatedAssignedUserResponseData = {
           user: {
@@ -353,9 +416,29 @@ export class UserController {
 
     async deleteAssignedUser(req: Request, res: Response) {
       try {
-        const user = req.validatedTargetUser!;
+        const adminId = req.authenticatedUser!.id;
+        const deletedUser = await sequelize.transaction(async (transaction) => {
+          const user = await User.findOne({
+            where: { id: req.validatedTargetUser!.id, assignedTo: adminId },
+            transaction,
+            lock: transaction.LOCK.UPDATE,
+          });
+          if (!user) {
+            return null;
+          }
 
-        await user.destroy();
+          await UserAuditLog.create({
+            adminId,
+            userId: user.id,
+            action: "USER_DELETED",
+          }, { transaction });
+          await user.destroy({ transaction });
+          return user;
+        });
+        if (!deletedUser) {
+          return sendFailure(res, 404, "Assigned user not found");
+        }
+
         const responseData: IDeleteAssignedUserResponseData = {};
         return sendSuccess(res, "Assigned user deleted successfully", responseData);
       } catch (error) {

@@ -55,7 +55,7 @@ async register(
     const role = req.validatedRegistrationRole!;
     const assigningAdminId = req.validatedAssignedAdminId!;
 
-    // Create username
+    // Create username  
     const username =
       firstName.toLowerCase() +
       lastName.toLowerCase() +

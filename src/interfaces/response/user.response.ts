@@ -106,3 +106,16 @@ export interface IUpdatedAssignedUserResponseData {
 }
 
 export type IDeleteAssignedUserResponseData = Record<string, never>;
+
+export interface IUserAuditLogItemResponse {
+  id: number;
+  adminId: number;
+  userId: number;
+  action: "USER_CREATED" | "USER_UPDATED" | "USER_DELETED";
+  createdAt: Date;
+}
+
+export interface IUserAuditLogsResponseData {
+  pagination: IUserPaginationResponse;
+  auditLogs: IUserAuditLogItemResponse[];
+}

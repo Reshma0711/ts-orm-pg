@@ -19,6 +19,8 @@ const userController = new UserController();
 
 router.get("/assigned", authenticate, requireAdmin, assignedUsersPaginationValidation, validate, userController.listAssignedUsers);
 
+router.get("/audit-logs", authenticate, requireAdmin, assignedUsersPaginationValidation, validate, userController.listUserAuditLogs);
+
 router.get("/login-history", authenticate, assignedUsersPaginationValidation, validate, userController.getUserLoginHistory);
 
 router.get("/:id", authenticate, accessibleUserValidation, validate, userController.getAssignedUserById);

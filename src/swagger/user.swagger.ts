@@ -107,6 +107,30 @@
 
 /**
  * @openapi
+ * /users/audit-logs:
+ *   get:
+ *     tags: [Users]
+ *     summary: List audit events for users managed by the authenticated admin
+ *     description: Returns the authenticated admin's user creation, update, and deletion events with the target user and event timestamp.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
+ *     responses:
+ *       '200': { description: Paginated audit events returned }
+ *       '400': { description: Invalid pagination values }
+ *       '401': { description: Authentication required }
+ *       '403': { description: Admin access required }
+ *       '500': { description: Server error }
+ */
+
+/**
+ * @openapi
  * /users/login-history:
  *   get:
  *     tags: [Users]
