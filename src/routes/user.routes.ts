@@ -36,4 +36,5 @@ router.patch("/:id", authenticate, requireAdmin, assignedUserRecordValidation, u
 router.delete("/:id", authenticate, requireAdmin, assignedUserRecordValidation, validate, userController.deleteAssignedUser);
 
 
+
 export default router;

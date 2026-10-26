@@ -32,6 +32,7 @@ import type {
   IUpdatedProfileResponseData,
   IEmptyResponseData,
 } from "../interfaces/response/auth.response";
+import { redisClient } from "../config/redis.config";
 // import { sendPasswordResetEmail } from "../services/password-reset-email.service";
 
 const DEVELOPMENT_PASSWORD_RESET_OTP = "123456";
@@ -203,6 +204,23 @@ async login(
     }
 
     const { user, accessToken, refreshToken, deviceId } = result;
+
+    // ADD REDIS CODE HERE
+  const sessionData = {
+    userId: user.id,
+    deviceId,
+    accessToken,
+    refreshToken,
+    loggedInAt: new Date().toISOString(),
+  };
+
+  const value=await redisClient.set(`session:${user.id}`, JSON.stringify(sessionData), {
+    EX: 60 * 60 * 24 * 7, // 7 days
+  });
+
+  console.log("Redis SET result:", value);
+
+
     const responseData: ILoginResponseData = {
       accessToken,
       refreshToken,

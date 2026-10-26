@@ -1,5 +1,5 @@
-import { body, param, query } from "express-validator";
-import type { Request } from "express";
+import { body, param, query, validationResult } from "express-validator";
+import type { Request,Response, NextFunction } from "express";
 
 import Role, { ROLE_CODES } from "../models/role.model";
 import User from "../models/user.model";
@@ -671,3 +671,21 @@ export const accessibleUserValidation = accessibleUserByIdValidation(
 );
 
 export const assignedUserRecordValidation = assignedUserByIdValidation;
+
+export const validateUserId = [
+  param("userId")
+    .isInt({ min: 1 })
+    .withMessage("Invalid user ID"),
+
+  (req: Request, res: Response, next: NextFunction) => {
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        errors: errors.array(),
+      });
+    }
+    next();
+  },
+];
+

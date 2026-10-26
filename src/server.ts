@@ -18,6 +18,7 @@ import {
 import { initUserAuditLogModel } from "./models/user-audit-log.model";
 
 import routes from "./routes";
+import internalAssignmentRoutes from "./routes/internal-assignment.routes";
 
 const app = express();
 
@@ -39,6 +40,7 @@ initLoginHistoryAssociations();
 
 // Routes
 app.use("/api", routes);
+app.use("/internal/assignments", internalAssignmentRoutes);
 
 // API documentation
 setupSwagger(app);
@@ -52,8 +54,8 @@ async function startServer() {
     await sequelize.authenticate();
     console.log("PostgreSQL connected");
 
-    // await connectRedis();
-    // console.log("Redis connected");
+    await connectRedis();
+   console.log("Redis connected");
 
     // Start Express
     app.listen(
